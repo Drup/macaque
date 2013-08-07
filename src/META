@@ -13,3 +13,11 @@ package "syntax" (
   archive(syntax,preprocessor) = "pa_macaque.cmo pa_bananas.cmo"
   archive(syntax,toploop) = "pa_macaque.cmo pa_bananas.cmo"
 )
+
+package "syntax2" (
+  requires = "macaque,camlp4"
+  version = "BETA"
+  description = "Syntax extension: Comprehension syntax for composable SQL statements"
+  archive(syntax,preprocessor) = "pa_sql.cmo pa_bananas.cmo"
+  archive(syntax,toploop) = "pa_sql.cmo pa_bananas.cmo"
+)

@@ -201,9 +201,9 @@ let () =
 
   let unary _loc op = (_loc, Op ((_loc, Ident op), [])) in
 
-  let opt_list _loc = function
-    | None -> (_loc, [])
-    | Some thing -> thing in
+  let fusion_list _loc l1 l2 =
+    let f = function Some (_,l) -> l | None -> [] in
+    (_loc, f l1 @ f l2) in
 
   (* Identifiers *)
   EXTEND CompGram
@@ -252,10 +252,13 @@ let () =
   (* see http://savage.net.au/SQL/sql-2003-2.bnf.html *)
 
   EXTEND CompGram
-   GLOBAL: view_eoi select_eoi insert_eoi delete_eoi update_eoi value;
+    GLOBAL: view_eoi select_eoi insert_eoi delete_eoi update_eoi value;
 
-   select_eoi: [[ "select" ; (_, s) = view; `EOI -> (_loc, Select s) ]];
-   (* view_eoi: [[ "select" ; (_, s) = view; `EOI -> (_loc, s) ]]; *)
+  (* http://savage.net.au/SQL/sql-2003-2.bnf.html#query%20specification *)
+  select_eoi: [[ "SELECT" ; (_, s) = select; `EOI -> (_loc, Select s) ]];
+
+  view_eoi: [[ "SELECT" ; (_, s) = select; `EOI -> (_loc, s) ]];
+
    (* insert_eoi: [[ "insert" ; tab = table; ":="; sel = view; `EOI -> *)
    (*                  (_loc, Insert (tab, sel)) ]]; *)
    (* delete_eoi: [[ "delete" ; bind = row_binding; comp_items = refinement; `EOI -> *)
@@ -267,58 +270,77 @@ let () =
    (*                comp_items = refinement; `EOI -> *)
    (*                  (_loc, Update (bind, res, comp_items)) ]]; *)
 
-   select_list: [[ li = LIST1 derived_column SEP "," -> li ]] ;
 
-   derived_column: [[ test_equal_after_ident; v = value ; "as" ; id = sql_binder; ->
-                 (_loc, (id, v))
-             | v = value LEVEL "simple"; ac = accessor ->
-                 let (_, default_name) = match ac with
-                   | (_, Field (_, path)) -> List.hd (List.rev path)
-                   | (_, Default field) -> field in
-                 (_loc, (default_name, (_loc, Access(v, ac)))) ]];
+  (* TOFIX : reactivate group by *)
+   select:
+     [[ result = result;
+        from = OPT from;
+        where = OPT where;
+        order_by = OPT order_by;
+        limit = OPT limit;
+        offset = OPT offset ->
+        (_loc,
+         { result = result ;
+           order_by = order_by;
+           limit = limit;
+           offset = offset;
+           items = fusion_list _loc from where
+         })
+      ]];
 
-   refinement: [[ "where"; items = comp_item_list -> (_loc, items) ]];
+  (* column specification *)
+  result: [[ l = as_binding_list -> _loc, Simple_select (Tuple l) ]];
+  as_binding:
+    [[ v = value ; "AS" ; id = sql_binder ->
+       (_loc, (id,v))
+     | v = value LEVEL "simple"; ac = accessor ->
+       let (_, default_name) = match ac with
+         | (_, Field (_, path)) -> List.hd (List.rev path)
+         | (_, Default field) -> field in
+       (_loc, (default_name, (_loc, Access(v, ac)))) ]];
+  as_binding_list: [[ l = LIST1 as_binding SEP "," -> l ]];
 
-   view: [[ result = result;
-            order_by = OPT order_by;
-            limit = OPT limit;
-            offset = OPT offset;
-            items = OPT refinement ->
-              (_loc, { result = result;
-                       order_by = order_by;
-                       limit = limit;
-                       offset = offset;
-                       items = opt_list _loc items }) ]];
-   result: [[ (_, v) = value -> (_loc, Simple_select v)
-            | "group"; group = tuple; by = OPT ["by"; by = tuple -> by] ->
-              let by = match by with
-                | Some by -> by
-                | None -> (_loc, []) in
-                (_loc, Group_by (group, by)) ]];
-   order_by: [[ "order"; "by"; li = LIST1 sort_expr SEP "," -> li ]];
-   sort_expr: [[ v = value; order = OPT ["asc" | "desc"] ->
+  from:
+    [[ "FROM"; items = table_item_list -> (_loc, items) ]];
+  table_item:
+    [[ table = table ; "AS" ; id = sql_binder -> (_loc, Bind (id, table)) ]];
+  (* We redefine the list here to add an optional final separator. *)
+   table_item_list:
+     [[ i = table_item; ","; is = SELF -> i :: is
+      | i = table_item -> [i]
+      | -> [] ]];
+
+  where: [[ "WHERE"; (_cond_loc,cond) = value ->
+            (_loc, [ (_cond_loc,Cond cond) ]) ]];
+
+  order_by: [[ "ORDER"; "BY"; li = LIST1 sort_expr SEP "," -> li ]];
+  sort_expr: [[ v = value; order = OPT ["ASC" | "DESC"] ->
                    let order = match order with
-                     | None | Some "asc" -> Asc
+                     | None | Some "ASC" -> Asc
                      | _ -> Desc in
                    (_loc, (v, order)) ]];
-   limit: [[ "limit"; v = value -> v ]];
-   offset: [[ "offset"; v = value -> v ]];
-   comp_item: [[ (_, binding) = row_binding -> (_loc, Bind binding)
-               | (_, cond) = value -> (_loc, Cond cond) ]];
-   row_binding:
-     [[ test_in_after_ident; handle = sql_binder; "in"; table = table ->
-          (_loc, (handle, table)) ]];
-   table: [[ `ANTIQUOT("", t) -> (_loc, quote _loc t)
+
+  (* TOFIX : implement "ALL" value for limit *)
+  limit: [[ "LIMIT"; v = value -> v ]];
+
+  offset: [[ "OFFSET"; v = value -> v ]];
+
+
+  table: [[ `ANTIQUOT("", t) -> (_loc, quote _loc t)
            | `ANTIQUOT(id, t) ->
                (_loc, <:expr< Sql.View.$lid:id$ $quote _loc t$ >>) ]];
-   value:
+
+
+  (* TODO : think about priority : "IF x THEN a AS bla" *)
+  value:
      [ "top" RIGHTA
          [ "match"; e = SELF; "with";
            OPT "|"; LIDENT "null"; "->"; null_case = SELF;
            "|"; id = sql_binder; "->"; other_case = SELF ->
               (_loc, Match (e, null_case, id, other_case))
          | "if"; p = SELF; "then"; a = SELF; "else"; b = SELF ->
-             (_loc, If(p, a, b)) ]
+             (_loc, If(p, a, b))
+         ]
      | "||" RIGHTA [ e1 = SELF; op = infixop6; e2 = SELF -> operation _loc op [e1; e2] ]
      | "&&" RIGHTA [ e1 = SELF; op = infixop5; e2 = SELF -> operation _loc op [e1; e2] ]
      | "<"  LEFTA [ e1 = SELF; op = infixop0; e2 = SELF -> operation _loc op [e1; e2] ]
@@ -339,10 +361,19 @@ let () =
          | "("; (_, e) = SELF; ")" -> (_loc, e)
          | "["; e = SELF; "]" -> (_loc, Accum e) ]];
 
-   comp_item_list:
-     [[ i = comp_item; ";"; is = SELF -> i :: is
-      | i = comp_item -> [i]
-      | -> [] ]];
+  tuple: [[ "{"; named_fields = binding_list; "}" -> (_loc, named_fields)]];
+  binding:
+    [[ test_equal_after_ident; id = sql_binder; "="; v = value ->
+       (_loc, (id, v))
+     | v = value LEVEL "simple"; ac = accessor ->
+       let (_, default_name) = match ac with
+         | (_, Field (_, path)) -> List.hd (List.rev path)
+         | (_, Default field) -> field in
+       (_loc, (default_name, (_loc, Access(v, ac)))) ]];
+  binding_list:
+    [[ b = binding; ";"; bs = SELF -> b :: bs
+     | b = binding -> [b]
+     | -> [] ]];
 
    accessor:
      [[ "."; path = field_path -> (_loc, Field path)
@@ -350,19 +381,6 @@ let () =
 
    field_path :
      [[ path = LIST1 [id = sql_ident -> (_loc, id)] SEP "." -> (_loc, path) ]];
-
-   tuple: [[ "{"; named_fields = binding_list; "}" -> (_loc, named_fields) ]];
-   binding: [[ test_equal_after_ident; id = sql_binder; "="; v = value ->
-                 (_loc, (id, v))
-             | v = value LEVEL "simple"; ac = accessor ->
-                 let (_, default_name) = match ac with
-                   | (_, Field (_, path)) -> List.hd (List.rev path)
-                   | (_, Default field) -> field in
-                 (_loc, (default_name, (_loc, Access(v, ac)))) ]];
-   binding_list:
-     [[ b = binding; ";"; bs = SELF -> b :: bs
-      | b = binding -> [b]
-      | -> [] ]];
 
    atom: [[ `ANTIQUOT("", v) -> quote _loc v
           | `INT(i, _) -> <:expr< Sql.Value.int32 (Int32.of_int $`int:i$) >>
