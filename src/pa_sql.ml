@@ -289,11 +289,17 @@ let () =
       ]];
 
   (* column specification *)
+  (* TOFIX : There is an issue here we left recursivity in the grammar :
+     - We need a "?" token to break the recursivity for row specification whitout "AS" (second case in {! as_binding }).
+     - We would like to be able to put a value as a complete row specification, the grammar would look like this :
+     result ::= value | LIST1 as_binding SEP ","
+      This is not possible easily as the grammar become ambiguous.
+  *)
   result: [[ l = as_binding_list -> _loc, Simple_select (Tuple l) ]];
   as_binding:
     [[ v = value ; "AS" ; id = sql_binder ->
        (_loc, (id,v))
-     | v = value LEVEL "simple"; ac = accessor ->
+     | "?" ; v = value LEVEL "simple"; ac = accessor ->
        let (_, default_name) = match ac with
          | (_, Field (_, path)) -> List.hd (List.rev path)
          | (_, Default field) -> field in
@@ -330,8 +336,6 @@ let () =
            | `ANTIQUOT(id, t) ->
                (_loc, <:expr< Sql.View.$lid:id$ $quote _loc t$ >>) ]];
 
-
-  (* TODO : think about priority : "IF x THEN a AS bla" *)
   value:
      [ "top" RIGHTA
          [ "match"; e = SELF; "with";
