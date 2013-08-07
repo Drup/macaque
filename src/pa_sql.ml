@@ -270,8 +270,6 @@ let () =
    (*                comp_items = refinement; `EOI -> *)
    (*                  (_loc, Update (bind, res, comp_items)) ]]; *)
 
-
-  (* TOFIX : reactivate group by *)
    select:
      [[ result = result;
         from = OPT from;
@@ -295,7 +293,13 @@ let () =
      result ::= value | LIST1 as_binding SEP ","
       This is not possible easily as the grammar become ambiguous.
   *)
-  result: [[ l = as_binding_list -> _loc, Simple_select (Tuple l) ]];
+  result: [[ (_,l) = as_binding_list -> _loc, Simple_select (Tuple l)
+           | l = as_binding_list ;
+             by = OPT ["GROUP" ; "BY"; by = as_binding_list -> by] ->
+              let by = match by with
+                | Some by -> by
+                | None -> (_loc, []) in
+                (_loc, Group_by (l, by)) ]];
   as_binding:
     [[ v = value ; "AS" ; id = sql_binder ->
        (_loc, (id,v))
@@ -304,7 +308,7 @@ let () =
          | (_, Field (_, path)) -> List.hd (List.rev path)
          | (_, Default field) -> field in
        (_loc, (default_name, (_loc, Access(v, ac)))) ]];
-  as_binding_list: [[ l = LIST1 as_binding SEP "," -> l ]];
+  as_binding_list: [[ l = LIST1 as_binding SEP "," -> _loc,l ]];
 
   from:
     [[ "FROM"; items = table_item_list -> (_loc, items) ]];
