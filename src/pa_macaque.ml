@@ -326,6 +326,7 @@ let () =
          | "("; (_, e) = SELF; ")" -> (_loc, e)
          | "["; e = SELF; "]" -> (_loc, Accum e) ]];
 
+  (* We redefine the list here to add an optional final separator. *)
    comp_item_list:
      [[ i = comp_item; ";"; is = SELF -> i :: is
       | i = comp_item -> [i]
@@ -346,6 +347,7 @@ let () =
                    | (_, Field (_, path)) -> List.hd (List.rev path)
                    | (_, Default field) -> field in
                  (_loc, (default_name, (_loc, Access(v, ac)))) ]];
+  (* We redefine the list here to add an optional final separator. *)
    binding_list:
      [[ b = binding; ";"; bs = SELF -> b :: bs
       | b = binding -> [b]
