@@ -92,9 +92,9 @@ and field_descr =
 (** Syntaxic form parsing *)
 module CompGram = MakeGram(Lexer)
 
-let view_eoi, select_eoi, insert_eoi, delete_eoi, update_eoi, value =
+let view_eoi, value =
   let mk = CompGram.Entry.mk in
-  mk "view", mk "select", mk "insert", mk "delete", mk "update", mk "value"
+  mk "view", mk "value"
 
 let table_descr, seq_descr =
   let mk = CompGram.Entry.mk in
@@ -249,18 +249,16 @@ let () =
 
   (* Comprehensions *)
 
-  (* see http://savage.net.au/SQL/sql-2003-2.bnf.html *)
-
   EXTEND CompGram
-    GLOBAL: view_eoi select_eoi insert_eoi delete_eoi update_eoi value;
+    GLOBAL: view_eoi value;
 
-  (* http://savage.net.au/SQL/sql-2003-2.bnf.html#query%20specification *)
-  select_eoi: [[ "SELECT" ; (_, s) = select; `EOI -> (_loc, Select s) ]];
+  view_eoi:
+    [[ "SELECT" ; (_, s) = view; `EOI -> (_loc, Select s)
+     | "INSERT"; "INTO" ; t = table ; "SELECT" ; s = view; `EOI ->
+       (_loc, Insert (t, sel))
+     | "DELETE" ; "FROM" ; t = table ;
+     ]];
 
-  view_eoi: [[ "SELECT" ; (_, s) = select; `EOI -> (_loc, s) ]];
-
-   (* insert_eoi: [[ "insert" ; tab = table; ":="; sel = view; `EOI -> *)
-   (*                  (_loc, Insert (tab, sel)) ]]; *)
    (* delete_eoi: [[ "delete" ; bind = row_binding; comp_items = refinement; `EOI -> *)
    (*                  (_loc, Delete (bind, comp_items)) *)
    (*             | tab = table; `EOI -> *)
@@ -270,7 +268,7 @@ let () =
    (*                comp_items = refinement; `EOI -> *)
    (*                  (_loc, Update (bind, res, comp_items)) ]]; *)
 
-   select:
+   view:
      [[ result = result;
         from = OPT from;
         where = OPT where;
@@ -287,7 +285,7 @@ let () =
       ]];
 
   (* column specification *)
-  (* TOFIX : There is an issue here we left recursivity in the grammar :
+  (* TOFIX : There is an issue here with left recursivity in the grammar :
      - We need a "?" token to break the recursivity for row specification whitout "AS" (second case in {! as_binding }).
      - We would like to be able to put a value as a complete row specification, the grammar would look like this :
      result ::= value | LIST1 as_binding SEP ","
@@ -788,16 +786,11 @@ let () =
        value_of_comp Env.empty (CompGram.parse_string value loc quote));
   Syntax.Quotation.add "view" Syntax.Quotation.DynAst.expr_tag
     (fun loc _ quote ->
-       view_of_comp (CompGram.parse_string view_eoi loc quote));
-  List.iter
-    (fun (name, gram_rule) ->
-       Syntax.Quotation.add name Syntax.Quotation.DynAst.expr_tag
-         (fun loc _ quote ->
-            query_of_comp (CompGram.parse_string gram_rule loc quote)))
-    [ "select", select_eoi;
-      "insert", insert_eoi;
-      "delete", delete_eoi;
-      "update", update_eoi ];
+       let q = CompGram.parse_string view_eoi loc quote in
+       match q with
+         | (l,Select v) -> view_of_comp (l,v)
+         | _ -> query_of_comp q
+    ) ;
 
   (* Table descriptions *)
   Syntax.Quotation.add "table" Syntax.Quotation.DynAst.expr_tag
